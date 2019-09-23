@@ -1,27 +1,38 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Container, Header, Icon, Input, Popup, Table } from 'semantic-ui-react';
+import {
+	Button,
+	Card,
+	Container,
+	Flag,
+	Header,
+	Icon,
+	Input,
+	Popup,
+	Table,
+	Transition,
+} from 'semantic-ui-react';
 import 'semantic-ui-css/semantic.min.css';
 import config from './config';
 import api from './api';
 
 const getValue = (obj, key) => {
 	const attrs = key.split('.');
-	return attrs.reduce((o, k) => (Array.isArray(o) ? o.map((x) => x[k]) : o[k]), obj);
+	return attrs.reduce((o, k) => (Array.isArray(o) ? o.map(x => x[k]) : o[k]), obj);
 };
 
-const utcToDatetime = (utc) => {
+const utcToDatetime = utc => {
 	const date = new Date(null);
-	const offset = date.getTimezoneOffset();
-	date.setSeconds(utc - offset * 60);
+	date.setSeconds(utc - date.getTimezoneOffset() * 60);
 	return date.toISOString().substr(11, 8);
 };
 
 const getNow = () => {
 	const date = new Date();
+	date.setSeconds(date.getSeconds() - date.getTimezoneOffset() * 60);
 	return date.toISOString().substr(0, 19).replace('T', ' ');
 };
 
-const isNumeric = (n) => {
+const isNumeric = n => {
 	return !isNaN(parseFloat(n)) && isFinite(n);
 };
 
@@ -32,12 +43,21 @@ export default () => {
 
 	useEffect(() => {
 		const fetchData = async () => {
+			setUpdatedAt(''); // make it blank to trigger transition
+			setUpdatedAt(getNow());
+
+			const skills = await api.get('/projects/0.1/jobs/', {
+				params: {
+					job_names: config.skills,
+				},
+			});
+			const skillIds = skills.data.result.map(({ id }) => id);
+
 			const resp = await api.get('/projects/0.1/projects/active/', {
 				params: {
-					query: config.query,
 					limit: config.limit,
 					project_types: config.projectTypes,
-					bidders: [ config.userId ],
+					jobs: skillIds,
 					full_description: true,
 					job_details: true,
 					compact: false,
@@ -45,16 +65,17 @@ export default () => {
 			});
 
 			const { projects } = resp.data.result;
-			const ids = projects.map(({ id }) => id);
+			const projectIds = projects.map(({ id }) => id);
 
 			// find bidded projects
 			const bids = await api.get('/projects/0.1/bids/', {
 				params: {
-					projects: ids,
+					projects: projectIds,
 					bidders: [ config.userId ],
 				},
 			});
-			const biddedIds = bids.data.result.bids.map((bid) => bid.project_id);
+
+			const biddedIds = bids.data.result.bids.map(bid => bid.project_id);
 
 			const keys = [
 				'id',
@@ -63,7 +84,7 @@ export default () => {
 				'seo_url',
 				'description',
 				'preview_description',
-				'jobs.category.name',
+				'jobs.name',
 				'currency.code',
 				'currency.country',
 				'budget.minimum',
@@ -73,14 +94,19 @@ export default () => {
 				'submitdate',
 			];
 
-			setProjects(
-				projects.map((prj) =>
-					keys.reduce((o, k) => ({ [k]: getValue(prj, k), ...o }), {
+			setProjects(prevState => {
+				// make a notify sound when new projects are found
+				if (prevState.filter(({ id }) => !projectIds.includes(id)).length > 0) {
+					const audio = new Audio('notify.mp3');
+					audio.play();
+				}
+
+				return projects.map(prj =>
+					keys.reduce((obj, k) => ({ [k]: getValue(prj, k), ...obj }), {
 						bidded: biddedIds.includes(prj.id),
 					})
-				)
-			);
-			setUpdatedAt(getNow());
+				);
+			});
 		};
 		fetchData();
 		setInterval(fetchData, config.interval);
@@ -107,17 +133,23 @@ export default () => {
 
 	return (
 		<Container style={{ padding: 10, width: '100%', fontSize: 12 }}>
-			<Header color="blue">
-				<Icon name="clock outline" style={{ margin: 3 }} />Last Updated: {updatedAt}
+			<Header dividing as="h2" color="blue">
+				<Transition visible={!!updatedAt} animation="fade" duration={1000}>
+					<div>
+						<Icon name="clock outline" style={{ margin: 3 }} />Last Updated: {updatedAt}
+					</div>
+				</Transition>
 			</Header>
-			<Table celled structured>
+			<Table celled striped structured>
 				<Table.Header>
 					<Table.Row>
-						<Table.HeaderCell rowSpan="2">No.</Table.HeaderCell>
+						<Table.HeaderCell rowSpan="2" textAlign="center">
+							No.
+						</Table.HeaderCell>
 						<Table.HeaderCell rowSpan="2">
 							Title (Hover to see the description)
 						</Table.HeaderCell>
-						<Table.HeaderCell rowSpan="2">Submit</Table.HeaderCell>
+						<Table.HeaderCell rowSpan="2">Submitted</Table.HeaderCell>
 						<Table.HeaderCell colSpan="3" textAlign="center">
 							Budget
 						</Table.HeaderCell>
@@ -127,40 +159,64 @@ export default () => {
 						<Table.HeaderCell rowSpan="2" textAlign="center">
 							Bid
 						</Table.HeaderCell>
+						<Table.HeaderCell rowSpan="2" textAlign="center">
+							Bidded
+						</Table.HeaderCell>
 					</Table.Row>
 					<Table.Row>
-						<Table.HeaderCell textAlign="center">Min</Table.HeaderCell>
-						<Table.HeaderCell textAlign="center">Max</Table.HeaderCell>
-						<Table.HeaderCell textAlign="center">Currency</Table.HeaderCell>
-						<Table.HeaderCell textAlign="center">Count</Table.HeaderCell>
-						<Table.HeaderCell textAlign="center">Average</Table.HeaderCell>
+						<Table.HeaderCell>Min</Table.HeaderCell>
+						<Table.HeaderCell>Max</Table.HeaderCell>
+						<Table.HeaderCell>Currency</Table.HeaderCell>
+						<Table.HeaderCell>Count</Table.HeaderCell>
+						<Table.HeaderCell>Average</Table.HeaderCell>
 					</Table.Row>
 				</Table.Header>
 
 				<Table.Body>
 					{projects.map((project, idx) => (
-						<Table.Row key={project.id} positive={!!project.bidded}>
-							<Table.Cell>{idx + 1}</Table.Cell>
+						<Table.Row key={project.id}>
+							<Table.Cell textAlign="center">{idx + 1}</Table.Cell>
 							<Table.Cell>
 								<Popup
 									trigger={
 										<a
 											href={`https://www.freelancer.com/projects/${project.seo_url}`}
 											rel="noopener noreferrer"
+											style={{ fontWeight: 'bold' }}
 											target="_blank"
 										>
 											{project.title}
 										</a>
 									}
-									content={project.description}
+									content={
+										<Card fluid>
+											<Card.Content>
+												<Card.Header as={Header} dividing>
+													Details
+												</Card.Header>
+												<Card.Description>
+													{project.description}
+												</Card.Description>
+												<Card.Header as={Header} dividing>
+													Skills Required
+												</Card.Header>
+												<Card.Description>
+													{project['jobs.name'].join(', ')}
+												</Card.Description>
+											</Card.Content>
+										</Card>
+									}
 									wide="very"
-									position="right center"
+									// position="right center"
 								/>
 							</Table.Cell>
 							<Table.Cell>{utcToDatetime(project.submitdate)}</Table.Cell>
 							<Table.Cell>{project['budget.minimum']}</Table.Cell>
 							<Table.Cell>{project['budget.maximum']}</Table.Cell>
-							<Table.Cell>{project['currency.country']}</Table.Cell>
+							<Table.Cell>
+								<Flag name={`${project['currency.country'].toLowerCase()}`} />
+								{project['currency.code']}
+							</Table.Cell>
 							<Table.Cell>{project['bid_stats.bid_count']}</Table.Cell>
 							<Table.Cell>{Math.round(project['bid_stats.bid_avg'])}</Table.Cell>
 							<Table.Cell>
@@ -169,7 +225,7 @@ export default () => {
 									action={
 										<Button
 											primary
-											size="mini"
+											size="small"
 											onClick={() =>
 												bidOnProject(project.id, bidAmounts[project.id])}
 											disabled={
@@ -179,12 +235,22 @@ export default () => {
 												)
 											}
 										>
-											Bid
+											<Icon name="paper plane" style={{ margin: 0 }} />
 										</Button>
 									}
 									value={project.id in bidAmounts ? bidAmounts[project.id] : ''}
-									onChange={(event) => onBidAmountChange(event, project.id)}
+									onChange={event => onBidAmountChange(event, project.id)}
 								/>
+							</Table.Cell>
+							<Table.Cell textAlign="center">
+								{project.bidded && (
+									<Icon
+										name="check"
+										size="large"
+										color="teal"
+										style={{ margin: 0 }}
+									/>
+								)}
 							</Table.Cell>
 						</Table.Row>
 					))}
